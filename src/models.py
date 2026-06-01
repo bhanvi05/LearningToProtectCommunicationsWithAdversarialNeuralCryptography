@@ -33,15 +33,16 @@ class MixTransformNN(torch.nn.Module):
 
         x = x[None, :, :].transpose(0, 1)
 
-        x = F.sigmoid(self.fc_layer(x))
+        # F.sigmoid and F.tanh are removed in PyTorch 2.x — use torch.sigmoid / torch.tanh
+        x = torch.sigmoid(self.fc_layer(x))
 
-        x = F.sigmoid(self.conv1(x))
+        x = torch.sigmoid(self.conv1(x))
 
-        x = F.sigmoid(self.conv2(x))
+        x = torch.sigmoid(self.conv2(x))
 
-        x = F.sigmoid(self.conv3(x))
+        x = torch.sigmoid(self.conv3(x))
 
-        x = F.tanh(self.conv4(x))
+        x = torch.tanh(self.conv4(x))
 
         return torch.squeeze(x)
     # end
