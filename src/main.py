@@ -5,7 +5,6 @@
 import torch
 import torch.nn as nn
 from torch.optim import Adam
-from torch.autograd import Variable
 import argparse
 import os
 import numpy as np
@@ -60,7 +59,7 @@ def get_args():
 # end
 
 
-def train(gpu_available,
+def train(device,
           prjPaths,
           n,
           training_steps,
@@ -73,19 +72,14 @@ def train(gpu_available,
           aggregated_losses_every_n_steps=100):
 
     # define networks
-    alice = MixTransformNN(D_in=(n*2), H=(n*2))
-    bob = MixTransformNN(D_in=(n*2), H=(n*2))
-    eve = MixTransformNN(D_in=n, H=(n*2))
+    alice = MixTransformNN(D_in=(n*2), H=(n*2)).to(device)
+    bob = MixTransformNN(D_in=(n*2), H=(n*2)).to(device)
+    eve = MixTransformNN(D_in=n, H=(n*2)).to(device)
 
     # specify that model is currently in training mode
     alice.train()
     bob.train()
     eve.train()
-
-    if gpu_available:
-        alice.cuda()
-        bob.cuda()
-        eve.cuda()
 
     # pickle n (message length)
     persist_object(full_path=os.path.join(prjPaths.PERSIST_DIR, "n.p"), x=n)
@@ -103,7 +97,7 @@ def train(gpu_available,
     optimizer_bob = Adam(params=bob.parameters(), lr=learning_rate)
     optimizer_eve = Adam(params=eve.parameters(), lr=learning_rate)
 
-    # define losses 
+    # define losses
     bob_reconstruction_error = nn.L1Loss()
     eve_reconstruction_error = nn.L1Loss()
 
@@ -116,14 +110,14 @@ def train(gpu_available,
         # Training alternates between Alice/Bob and Eve
         for network, num_minibatches in {"alice_bob": 1, "eve": 2}.items():
 
-            """ 
-            Alice/Bob training for one minibatch, and then Eve training for two minibatches this ratio 
+            """
+            Alice/Bob training for one minibatch, and then Eve training for two minibatches this ratio
             in order to give a slight computational edge to the adversary Eve without training it so much
             that it becomes excessively specific to the exact current parameters of Alice and Bob
             """
             for minibatch in range(num_minibatches):
 
-                p, k = generate_data(gpu_available=gpu_available, batch_size=batch_size, n=n)
+                p, k = generate_data(device=device, batch_size=batch_size, n=n)
 
                 # forward pass through alice and eve networks
                 alice_c = alice.forward(torch.cat((p, k), 1).float())
@@ -137,7 +131,7 @@ def train(gpu_available,
                     # calculate errors
                     error_bob = bob_reconstruction_error(input=bob_p, target=p)
                     error_eve = eve_reconstruction_error(input=eve_p, target=p)
-                    alice_bob_loss =  error_bob + (1.0 - error_eve**2)
+                    alice_bob_loss = error_bob + (1.0 - error_eve**2)
 
                     # Zero gradients, perform a backward pass, clip gradients, and update the weights.
                     optimizer_alice.zero_grad()
@@ -159,7 +153,7 @@ def train(gpu_available,
                     nn.utils.clip_grad_value_(eve.parameters(), clip_value)
                     optimizer_eve.step()
 
-        # end time time for step
+        # end time for step
         time_elapsed = time.time() - tic
 
         if step % aggregated_losses_every_n_steps == 0:
@@ -187,8 +181,8 @@ def train(gpu_available,
     persist_object(full_path=os.path.join(prjPaths.PERSIST_DIR, "aggregated_losses.p"), x=aggregated_losses)
 # end
 
-def inference(gpu_available, prjPaths):
-    
+def inference(device, prjPaths):
+
     # declare function member constant
     NUM_BITS_PER_BYTE = 8
 
@@ -200,23 +194,21 @@ def inference(gpu_available, prjPaths):
     bob = MixTransformNN(D_in=(n*2), H=(n*2))
     eve = MixTransformNN(D_in=n, H=(n*2))
 
-
-    # restoring persisted networks
+    # restoring persisted networks — weights_only=True is required in PyTorch 2.6+
     print("restoring Alice, Bob, and Eve networks...\n")
-    alice.load_state_dict(torch.load(os.path.join(prjPaths.CHECKPOINT_DIR, "alice.pth")))
-    bob.load_state_dict(torch.load(os.path.join(prjPaths.CHECKPOINT_DIR, "bob.pth")))
-    eve.load_state_dict(torch.load(os.path.join(prjPaths.CHECKPOINT_DIR, "eve.pth")))
+    alice.load_state_dict(torch.load(os.path.join(prjPaths.CHECKPOINT_DIR, "alice.pth"), map_location=device, weights_only=True))
+    bob.load_state_dict(torch.load(os.path.join(prjPaths.CHECKPOINT_DIR, "bob.pth"), map_location=device, weights_only=True))
+    eve.load_state_dict(torch.load(os.path.join(prjPaths.CHECKPOINT_DIR, "eve.pth"), map_location=device, weights_only=True))
 
-    # specify that model is currently in training mode
+    # move models to device
+    alice.to(device)
+    bob.to(device)
+    eve.to(device)
+
+    # specify that model is currently in eval mode
     alice.eval()
     bob.eval()
     eve.eval()
-
-    # if gpu available then run inference on gpu
-    if gpu_available:
-        alice.cuda()
-        bob.cuda()
-        eve.cuda()
 
     convert_tensor_to_list_and_scale = lambda tensor: list(map(lambda x: int((round(x)+1)/2), tensor.cpu().detach().numpy().tolist()))
 
@@ -241,11 +233,8 @@ def inference(gpu_available, prjPaths):
         for p_b in p_bs:
 
             # generate k
-            _, k = generate_data(gpu_available=gpu_available, batch_size=1, n=n)
-            p_b = torch.unsqueeze(torch.from_numpy(p_b)*2-1, 0)
-
-            if gpu_available:
-                p_b = p_b.cuda()
+            _, k = generate_data(device=device, batch_size=1, n=n)
+            p_b = torch.unsqueeze(torch.from_numpy(p_b)*2-1, 0).to(device)
 
             # run forward pass through networks
             alice_c = torch.unsqueeze(alice.forward(torch.cat((p_b, k), 1).float()), 0)
@@ -254,7 +243,7 @@ def inference(gpu_available, prjPaths):
 
             eve_ps_b.append("".join(list(map(str, eve_p))))
             bob_ps_b.append("".join(list(map(str, bob_p))))
-        
+
         print("eve_ps_b:                     {}".format(list(itertools.chain.from_iterable([[i[:8], i[8:]]  for i in eve_ps_b]))))
         print("bob_ps_b:                     {}\n".format(list(itertools.chain.from_iterable([[i[:8], i[8:]]  for i in bob_ps_b]))))
 
@@ -270,14 +259,12 @@ def main():
     args = get_args()
     prjPaths_ = prjPaths()
 
-    # determine if gpu present
-    if torch.cuda.device_count() > 0:
-        gpu_available = True
-    else:
-        gpu_available = False
+    # single device variable replaces gpu_available boolean + hardcoded .cuda() calls
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    print(f"Using device: {device}")
 
     if args.run_type == "train":
-        train(gpu_available=gpu_available,
+        train(device=device,
               prjPaths=prjPaths_,
               n=args.n,
               training_steps=args.training_steps,
@@ -288,7 +275,7 @@ def main():
               verbose=args.verbose,
               clip_value=args.clip_value)
     elif args.run_type == "inference":
-        inference(gpu_available, prjPaths=prjPaths_)
+        inference(device=device, prjPaths=prjPaths_)
 # end
 
 if __name__ == "__main__":
