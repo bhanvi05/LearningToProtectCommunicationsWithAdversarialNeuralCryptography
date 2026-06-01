@@ -27,13 +27,12 @@ class prjPaths:
     # end
 # end
 
-def generate_data(gpu_available, batch_size, n):
-    if gpu_available:
-        return [torch.randint(0, 2, (batch_size, n), dtype=torch.float).cuda()*2-1,
-                torch.randint(0, 2, (batch_size, n), dtype=torch.float).cuda()*2-1]
-    else:
-        return [torch.randint(0, 2, (batch_size, n), dtype=torch.float)*2-1,
-                torch.randint(0, 2, (batch_size, n), dtype=torch.float)*2-1]
+def generate_data(device, batch_size, n):
+    # Use .float() instead of deprecated dtype=torch.float in randint
+    return [
+        torch.randint(0, 2, (batch_size, n)).float().to(device) * 2 - 1,
+        torch.randint(0, 2, (batch_size, n)).float().to(device) * 2 - 1
+    ]
 # end
 
 def UTF_8_to_binary(p_utf_8):
